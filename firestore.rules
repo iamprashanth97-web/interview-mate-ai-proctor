@@ -1,0 +1,124 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isHardcodedStaff() {
+      return isSignedIn() && (
+        request.auth.token.email == 'iamprashanth.97@gmail.com' ||
+        request.auth.token.email == 'prashanth97@gmail.com' ||
+        request.auth.token.email == 'prashanth221@gmail.com' ||
+        request.auth.token.email == 'prashanth28@gmail.com'
+      );
+    }
+
+    function isStaff() {
+      return isHardcodedStaff() || (
+        isSignedIn() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['ADMIN']
+      );
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Validation Blueprints ---
+    function isValidUser(data) {
+      return data.uid == request.auth.uid &&
+             data.email is string && data.email.size() <= 120 &&
+             data.role in ['ADMIN', 'CANDIDATE'] &&
+             data.displayName is string && data.displayName.size() <= 120;
+    }
+
+    function isValidSession(data) {
+      return (data.candidateId == request.auth.uid || isHardcodedStaff() || isStaff()) &&
+             data.startTime is number &&
+             data.status in ['PENDING', 'ONGOING', 'COMPLETED'] &&
+             data.cheatingScore is number && data.cheatingScore >= 0;
+    }
+
+    function isValidAlert(data) {
+      return (data.candidateId == request.auth.uid || isHardcodedStaff() || isStaff()) &&
+             data.timestamp is number &&
+             data.type is string &&
+             data.message is string &&
+             data.confidence is number;
+    }
+
+    // --- Rules ---
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) || isHardcodedStaff() || isStaff();
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      allow update: if isHardcodedStaff() || isStaff() || (isOwner(userId) && isValidUser(incoming()));
+      allow list: if isHardcodedStaff() || isStaff();
+    }
+
+    match /sessions/{sessionId} {
+      allow get: if isSignedIn() && (
+        existing().candidateId == request.auth.uid || 
+        existing().candidateId == 'demo-invited' || 
+        isHardcodedStaff() || 
+        isStaff()
+      );
+      allow create: if isSignedIn() && isValidSession(incoming()) && (
+        incoming().candidateId == request.auth.uid || 
+        incoming().candidateId == 'demo-invited' || 
+        isHardcodedStaff() || 
+        isStaff()
+      );
+      allow update: if (
+        isSignedIn() && (
+          isHardcodedStaff() || isStaff() ||
+          (existing().candidateId == 'demo-invited' && incoming().candidateId == request.auth.uid) ||
+          (existing().candidateId == request.auth.uid && existing().status != 'COMPLETED' &&
+          isValidSession(incoming()) && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'cheatingScore', 'endTime', 'isFlagged', 'startTime', 'lastScreenshot', 'candidateId', 'candidateName', 'lastContact'])
+          ))
+        )
+      );
+      allow list: if isSignedIn() && (
+        isHardcodedStaff() || 
+        resource.data.candidateId == request.auth.uid || 
+        resource.data.candidateId == 'demo-invited' || 
+        isStaff()
+      );
+    }
+
+    match /sessions/{sessionId}/alerts/{alertId} {
+      allow get: if isSignedIn() && (
+        existing().candidateId == request.auth.uid || 
+        isHardcodedStaff() || 
+        isStaff()
+      );
+      allow create: if isSignedIn() && 
+                    isValidAlert(incoming()) &&
+                    (isHardcodedStaff() || isStaff() || (
+                      incoming().candidateId == request.auth.uid
+                    ));
+      allow list: if isSignedIn() && (
+        isHardcodedStaff() || 
+        resource.data.candidateId == request.auth.uid || 
+        isStaff()
+      );
+    }
+  }
+}

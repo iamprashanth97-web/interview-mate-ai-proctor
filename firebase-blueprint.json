@@ -1,0 +1,59 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Stores user roles and basic profile information.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["ADMIN", "INTERVIEWER", "CANDIDATE"] },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "InterviewSession": {
+      "title": "Interview Session",
+      "description": "Main record for an interview attempt.",
+      "type": "object",
+      "properties": {
+        "candidateId": { "type": "string" },
+        "candidateName": { "type": "string" },
+        "startTime": { "type": "number" },
+        "endTime": { "type": "number" },
+        "status": { "type": "string", "enum": ["PENDING", "ONGOING", "COMPLETED"] },
+        "cheatingScore": { "type": "number" },
+        "isFlagged": { "type": "boolean" }
+      },
+      "required": ["candidateId", "startTime", "status"]
+    },
+    "Alert": {
+      "title": "Proctoring Alert",
+      "description": "Individual alerts detected during a session.",
+      "type": "object",
+      "properties": {
+        "candidateId": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "type": { "type": "string" },
+        "message": { "type": "string" },
+        "confidence": { "type": "number" }
+      },
+      "required": ["candidateId", "timestamp", "type", "message"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Users are identified by their Firebase Auth UID."
+    },
+    "/sessions/{sessionId}": {
+      "schema": "InterviewSession",
+      "description": "Top-level session documents."
+    },
+    "/sessions/{sessionId}/alerts/{alertId}": {
+      "schema": "Alert",
+      "description": "Real-time alerts for a specific session."
+    }
+  }
+}

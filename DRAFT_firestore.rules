@@ -1,0 +1,94 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && getUserRole() == 'ADMIN';
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // --- Validation Blueprints ---
+    function isValidUser(data) {
+      return data.uid == request.auth.uid &&
+             data.email is string && data.email.size() <= 100 &&
+             data.role in ['ADMIN', 'CANDIDATE'] &&
+             data.displayName is string && data.displayName.size() <= 100;
+    }
+
+    function isValidSession(data) {
+      return data.candidateId == request.auth.uid &&
+             data.startTime is number &&
+             data.status in ['PENDING', 'ONGOING', 'COMPLETED'] &&
+             data.cheatingScore is number && data.cheatingScore >= 0 && data.cheatingScore <= 100;
+    }
+
+    function isValidAlert(data) {
+      return data.timestamp is number &&
+             data.type is string && data.type.size() <= 50 &&
+             data.message is string && data.message.size() <= 500 &&
+             data.confidence is number;
+    }
+
+    // --- Rules ---
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && isValidUser(incoming()) && incoming().role == 'CANDIDATE';
+      allow update: if (isOwner(userId) && isValidUser(incoming()) && incoming().diff(existing()).affectedKeys().hasOnly(['displayName'])) || isAdmin();
+    }
+
+    match /sessions/{sessionId} {
+      allow read: if (isSignedIn() && existing().candidateId == request.auth.uid) || isAdmin();
+      allow create: if isSignedIn() && isValidSession(incoming()) && incoming().candidateId == request.auth.uid && incoming().status == 'PENDING';
+      allow update: if (
+        isSignedIn() && existing().candidateId == request.auth.uid && existing().status != 'COMPLETED' &&
+        isValidSession(incoming()) && (
+          // Candidate can update status to ONGOING/COMPLETED and cheatingScore
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'cheatingScore', 'endTime'])
+        )
+      ) || isAdmin();
+      allow list: if (isSignedIn() && resource.data.candidateId == request.auth.uid) || isAdmin();
+    }
+
+    match /sessions/{sessionId}/alerts/{alertId} {
+      allow read: if (isSignedIn() && get(/databases/$(database)/documents/sessions/$(sessionId)).data.candidateId == request.auth.uid) || isAdmin();
+      allow create: if isSignedIn() && 
+                    get(/databases/$(database)/documents/sessions/$(sessionId)).data.candidateId == request.auth.uid &&
+                    get(/databases/$(database)/documents/sessions/$(sessionId)).data.status != 'COMPLETED' &&
+                    isValidAlert(incoming());
+      allow list: if (isSignedIn() && get(/databases/$(database)/documents/sessions/$(sessionId)).data.candidateId == request.auth.uid) || isAdmin();
+    }
+  }
+}

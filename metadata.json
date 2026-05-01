@@ -1,0 +1,6 @@
+{
+  "name": "InterviewMate: Smart Interview Companion",
+  "description": "A friendly real-time monitoring system for online interviews, helping maintain fairness and integrity with ease.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["AI Object Detection", "Real-time Monitoring", "Full-stack Auth"]
+}
