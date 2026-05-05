@@ -81,13 +81,13 @@ export const CandidateDashboard: React.FC<CandidateDashboardProps> = ({ onStartS
   };
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-8 space-y-8">
+    <div className="max-w-6xl mx-auto px-4 py-8 space-y-6">
       <header>
         <motion.div
           initial={{ opacity: 0, x: -20 }}
           animate={{ opacity: 1, x: 0 }}
         >
-          <h1 className="text-4xl font-bold text-neutral-900 font-display tracking-tight">Candidate Lounge</h1>
+          <h1 className="text-4xl font-bold text-neutral-900 font-display tracking-tight leading-tight">Candidate Lounge</h1>
           <p className="text-neutral-500 font-medium tracking-tight">Welcome back, {profile?.displayName || 'Candidate'}</p>
         </motion.div>
       </header>
@@ -102,7 +102,7 @@ export const CandidateDashboard: React.FC<CandidateDashboardProps> = ({ onStartS
         )}
       </AnimatePresence>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
         {/* Main Content */}
         <motion.div 
           initial="hidden"
@@ -114,10 +114,10 @@ export const CandidateDashboard: React.FC<CandidateDashboardProps> = ({ onStartS
               transition: { staggerChildren: 0.1 }
             }
           }}
-          className="lg:col-span-2 space-y-8"
+          className="lg:col-span-2 order-2 lg:order-1 space-y-6"
         >
           <motion.section variants={{ hidden: { opacity: 0, y: 10 }, visible: { opacity: 1, y: 0 } }}>
-            <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-bold flex items-center gap-2">
                 <History className="text-brand-accent" size={24} />
                 Recent Sessions
@@ -227,7 +227,7 @@ export const CandidateDashboard: React.FC<CandidateDashboardProps> = ({ onStartS
               transition: { staggerChildren: 0.1, delayChildren: 0.3 }
             }
           }}
-          className="space-y-6"
+          className="order-1 lg:order-2 space-y-6"
         >
           <motion.div 
             variants={{ hidden: { opacity: 0, scale: 0.95 }, visible: { opacity: 1, scale: 1 } }}

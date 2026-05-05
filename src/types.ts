@@ -27,6 +27,9 @@ export interface InterviewSession {
   lastScreenshot?: string; // latest base64 snapshot for live monitoring
   interviewerJoined?: boolean;
   interviewerName?: string;
+  interviewerScreenshot?: string;
+  lastContact?: number;
+  interviewerLastContact?: number;
 }
 
 export interface AlertLog {

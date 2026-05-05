@@ -1,4 +1,4 @@
-# InterviewMate Security Specification
+# Interviewmate-ai Security Specification
 
 ## Data Invariants
 1. A session must be owned by the candidate who started it.

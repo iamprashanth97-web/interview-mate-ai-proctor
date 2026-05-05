@@ -29,7 +29,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onNavigate, activeView }) => {
             <ShieldCheck size={24} />
           </div>
           <div className="text-left">
-            <h1 className="text-lg font-bold tracking-tight">InterviewMate</h1>
+            <h1 className="text-lg font-bold tracking-tight">Interviewmate-ai</h1>
             <p className="text-[10px] uppercase tracking-widest text-neutral-500 font-medium whitespace-nowrap">
               {profile.role === 'ADMIN' ? 'Admin Console' : profile.role === 'INTERVIEWER' ? 'Recruiter Dashboard' : 'Interview Room'}
             </p>

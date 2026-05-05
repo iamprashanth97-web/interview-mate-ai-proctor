@@ -1,11 +1,16 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import { getAuth, setPersistence, browserSessionPersistence } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
+
+// Set persistence to session to avoid issues in some iframe/sandbox environments
+setPersistence(auth, browserSessionPersistence).catch(err => {
+  console.error("Firebase persistence error:", err);
+});
 
 export enum OperationType {
   CREATE = 'create',

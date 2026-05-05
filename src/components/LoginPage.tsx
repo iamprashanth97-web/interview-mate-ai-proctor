@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { ShieldCheck, LogIn, Mail, Lock, User, UserPlus, Eye, EyeOff } from 'lucide-react';
+import { ShieldCheck, LogIn, Mail, Lock, User, UserPlus, Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { UserRole } from '../types';
 
@@ -12,6 +12,7 @@ export const LoginPage: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [name, setName] = useState('');
   const [role, setRole] = useState<UserRole>('CANDIDATE');
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [error, setError] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -34,6 +35,34 @@ export const LoginPage: React.FC = () => {
       }
       setError(message);
     }
+  };
+
+  const handleGoogleLogin = () => {
+    setError('');
+    // Call login immediately to maintain user gesture context as much as possible
+    const loginPromise = login();
+    
+    setIsGoogleLoading(true);
+    
+    loginPromise
+      .catch((err: any) => {
+        console.error('Google login error detail:', err);
+        let message = 'Google login failed.';
+        
+        if (err.code === 'auth/popup-blocked') {
+          message = 'The login popup was blocked. Please allow popups or try opening the app in a new tab.';
+        } else if (err.code === 'auth/cancelled-popup-request') {
+          message = 'Login was interrupted. Please try again.';
+        } else if (err.code === 'auth/popup-closed-by-user') {
+          message = 'The login window was closed. For the best experience, click "Open in a new tab" at the top right of the preview header.';
+        } else if (err.message) {
+          message = err.message;
+        }
+        setError(message);
+      })
+      .finally(() => {
+        setIsGoogleLoading(false);
+      });
   };
 
   return (
@@ -83,7 +112,7 @@ export const LoginPage: React.FC = () => {
             transition={{ delay: 0.5 }}
             className="text-3xl font-bold text-neutral-900 font-display tracking-tight"
           >
-            InterviewMate
+            Interviewmate-ai
           </motion.h1>
           <motion.p 
             initial={{ opacity: 0 }}
@@ -206,13 +235,37 @@ export const LoginPage: React.FC = () => {
         </div>
 
         <button
-          onClick={login}
-          disabled={loading}
+          onClick={handleGoogleLogin}
+          disabled={loading || isGoogleLoading}
           className="w-full h-12 bg-white border border-neutral-200 hover:bg-neutral-50 text-neutral-700 rounded-xl font-bold text-sm flex items-center justify-center gap-3 transition-all active:scale-[0.98] disabled:opacity-50"
         >
-          <img src="https://www.google.com/favicon.ico" className="w-5 h-5" alt="Google" />
-          Google
+          {isGoogleLoading ? (
+             <div className="w-5 h-5 border-2 border-neutral-200 border-t-blue-600 rounded-full animate-spin" />
+          ) : (
+            <>
+              <img src="https://www.google.com/favicon.ico" className="w-5 h-5" alt="Google" />
+              Continue with Google
+            </>
+          )}
         </button>
+
+        {error && (
+          <motion.div 
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            className="mt-6 p-4 bg-amber-50 border border-amber-100 rounded-xl"
+          >
+            <div className="flex gap-3">
+              <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+              <div>
+                <p className="text-xs font-bold text-amber-800">Connection Issue Detected</p>
+                <p className="text-[11px] text-amber-700 mt-1 leading-relaxed">
+                  Authentication within the preview window can be restricted. <strong>Try opening the app in a new tab</strong> using the button in the top-right header for the most reliable connection.
+                </p>
+              </div>
+            </div>
+          </motion.div>
+        )}
 
         <p className="mt-8 text-[10px] text-center text-neutral-400 leading-relaxed">
           By signing in, you agree to our <span className="underline cursor-pointer">Terms of Service</span> and <span className="underline cursor-pointer">Privacy Policy</span>.

@@ -23,6 +23,8 @@ export const InterviewRoom: React.FC<InterviewRoomProps> = ({ sessionId, onClose
   const [status, setStatus] = useState<'ONGOING' | 'COMPLETED'>('ONGOING');
   const [interviewerJoined, setInterviewerJoined] = useState(false);
   const [interviewerName, setInterviewerName] = useState('');
+  const [interviewerScreenshot, setInterviewerScreenshot] = useState<string | null>(null);
+  const [interviewerLastContact, setInterviewerLastContact] = useState<number | null>(null);
   const [isCameraStarting, setIsCameraStarting] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [streamActive, setStreamActive] = useState(false);
@@ -212,52 +214,69 @@ export const InterviewRoom: React.FC<InterviewRoomProps> = ({ sessionId, onClose
         throw new Error("MEDIA_API_UNAVAILABLE");
       }
 
-      // Check available devices
-      const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
-      const hasCam = devices.some(d => d.kind === 'videoinput');
-      
-      // If we can't see any devices, enumerateDevices might be blocked or they really don't exist
-      // We still try getUserMedia anyway as some browsers block enumerate until permission given
+      // Check available devices to see what we're working with
+      let hasCamera = false;
+      let hasMicrophone = false;
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        hasCamera = devices.some(d => d.kind === 'videoinput');
+        hasMicrophone = devices.some(d => d.kind === 'audioinput');
+        console.log("Device check:", { hasCamera, hasMicrophone });
+      } catch (e) {
+        console.warn("Device enumeration failed before camera start:", e);
+      }
       
       let mediaStream: MediaStream | null = null;
       
-      const constraints = [
-        // 1. High-quality with specific camera if selected
-        { 
-          video: selectedCameraId ? { deviceId: { exact: selectedCameraId } } : { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }, 
-          audio: true 
+      // Define a more robust sequence of constraint attempts
+      const attempts = [
+        // 1. Ideal: Audio + High Quality Video
+        {
+          constraints: { 
+            video: selectedCameraId ? { deviceId: { exact: selectedCameraId } } : { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }, 
+            audio: hasMicrophone ? true : false 
+          },
+          label: "Full Access"
         },
-        // 2. Generic with audio
-        { video: true, audio: true },
-        // 3. Simple video only
-        { video: true },
-        // 4. Ultra-fallback (very low res)
-        { video: { width: 320, height: 240 } }
+        // 2. Fallback: Generic Video + Audio
+        {
+          constraints: { video: true, audio: hasMicrophone ? true : false },
+          label: "Generic Video/Audio"
+        },
+        // 3. Last Ditch: Video ONLY (If audio is the blocker)
+        {
+          constraints: { video: true, audio: false },
+          label: "Video Only Fallback"
+        }
       ];
 
-      for (let i = 0; i < constraints.length; i++) {
+      let lastError: any = null;
+
+      for (const attempt of attempts) {
         try {
-          console.log(`Attempting media with constraints (Set ${i + 1}):`, constraints[i]);
-          mediaStream = await navigator.mediaDevices.getUserMedia(constraints[i]);
-          console.log(`Media attempt ${i + 1} successful!`);
+          console.log(`Attempting media: ${attempt.label}`, attempt.constraints);
+          mediaStream = await navigator.mediaDevices.getUserMedia(attempt.constraints);
+          console.log(`Media successful with: ${attempt.label}`);
           break;
         } catch (e: any) {
+          lastError = e;
           const eName = e.name || "";
           const eMsg = e.message || "";
-          const rawError = `${eName}: ${eMsg}`;
-          console.warn(`Media attempt ${i + 1} failed:`, rawError);
-          
-          // Re-set detailed error for display
-          setCameraError(`RAW_ERROR|${rawError}`);
+          console.warn(`Media attempt (${attempt.label}) failed:`, eName, eMsg);
 
-          // If permission denied, we usually can't recover by changing constraints in the same session
-          // but we try simple video-only just in case it's an audio-permission specific issue
+          // If the user explicitly denied permission, repeating with different constraints 
+          // usually doesn't show a new prompt in the same session.
+          // However, if the error was different (like hardware issue with audio), moving to Video Only might help.
           if (eName === 'NotAllowedError' || eName === 'PermissionDeniedError' || eMsg.toLowerCase().includes('denied')) {
-             if (i === constraints.length - 1) throw e;
-             continue; 
+             // If we're failing a combined request, specifically try video-only next
+             // if we haven't already.
+             continue;
           }
-          if (i === constraints.length - 1) throw e;
         }
+      }
+
+      if (!mediaStream) {
+        throw lastError || new Error("FAILED_ALL_ATTEMPTS");
       }
 
       if (mediaStream) {
@@ -285,24 +304,33 @@ export const InterviewRoom: React.FC<InterviewRoomProps> = ({ sessionId, onClose
       
       const name = err.name || "";
       const msg = err.message || "";
+      const fullError = `${name}: ${msg}`.toLowerCase();
 
-      if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || msg.includes('denied')) {
+      if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || fullError.includes('denied') || fullError.includes('permission')) {
         errorType = "PERMISSION_DENIED";
-      } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError' || msg.includes('not found')) {
+      } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError' || fullError.includes('not found') || fullError.includes('no such device')) {
         errorType = "HARDWARE_NOT_FOUND";
       } else if (msg === 'MEDIA_API_UNAVAILABLE') {
         errorType = "API_UNAVAILABLE";
+      } else if (name === 'NotReadableError' || name === 'TrackStartError' || fullError.includes('could not start')) {
+        errorType = "IN_USE";
       }
-
-      const isIframe = window.self !== window.top;
-      if (isIframe && errorType === 'PERMISSION_DENIED') {
-        errorType = "IFRAME_RESTRICTION";
-      }
-
-      setCameraError(errorType);
+      
+      // Store the raw error for debugging
+      setCameraError(`${errorType}|${name}: ${msg}`);
     } finally {
       setIsCameraStarting(false);
     }
+  };
+
+  const getActiveErrorCode = () => {
+    if (!cameraError) return null;
+    return cameraError.split('|')[0];
+  };
+
+  const getRawErrorMessage = () => {
+    if (!cameraError) return "";
+    return cameraError.split('|')[1];
   };
 
   useEffect(() => {
@@ -350,7 +378,7 @@ export const InterviewRoom: React.FC<InterviewRoomProps> = ({ sessionId, onClose
         }
         isSnapshotting = false;
       }
-    }, 7000); // 7 seconds - even slower to prevent SDK assertion errors
+    }, 4000); // 4 seconds
 
     // Listen for alerts (optional, but good for sync)
     const q = query(collection(db, 'sessions', sessionId, 'alerts'), where('candidateId', '==', user?.uid));
@@ -367,6 +395,8 @@ export const InterviewRoom: React.FC<InterviewRoomProps> = ({ sessionId, onClose
       if (data) {
         setInterviewerJoined(!!data.interviewerJoined);
         setInterviewerName(data.interviewerName || 'Recruiter');
+        setInterviewerScreenshot(data.interviewerScreenshot || null);
+        setInterviewerLastContact((data as any).interviewerLastContact || null);
       }
     });
 
@@ -568,86 +598,65 @@ export const InterviewRoom: React.FC<InterviewRoomProps> = ({ sessionId, onClose
               <div className="w-16 h-16 bg-red-500/10 text-red-500 rounded-2xl flex items-center justify-center mx-auto mb-6 rotate-3">
                 <AlertTriangle size={32} />
               </div>
-              <h3 className="text-2xl font-bold mb-4">Hardware Blocked</h3>
-              <div className="text-neutral-400 mb-8 text-sm leading-relaxed">
-                {cameraError === 'IFRAME_RESTRICTION' ? (
-                  <div className="text-left space-y-4">
-                    <p>Browser security prevents camera access inside this "Preview" frame.</p>
-                    <div className="bg-blue-600/10 p-4 rounded-xl border border-blue-500/20">
-                      <p className="font-bold text-blue-400 mb-2 truncate">Solution:</p>
-                      <p>Opening the app in a <b>New Tab</b> is the only way to bypass this restriction.</p>
-                    </div>
-                  </div>
-                ) : cameraError === 'PERMISSION_DENIED' ? (
-                  <div className="space-y-4">
-                    <div className="flex flex-col items-center justify-center p-6 bg-red-500/10 rounded-2xl border border-red-500/20 mb-4">
-                       <Shield size={48} className="text-red-500 mb-3" />
-                       <p className="font-bold text-red-500">Access Explicitly Denied</p>
-                    </div>
-                    <div className="bg-white/5 p-5 rounded-2xl border border-white/10 text-left">
-                      <p className="text-xs uppercase tracking-widest font-bold text-amber-500 mb-3">How to unblock:</p>
-                      <ol className="space-y-4 text-sm">
-                        <li className="flex gap-3">
-                          <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-600 text-[10px] flex items-center justify-center font-bold">1</span>
-                          <span>Click the <span className="text-white font-bold">Camera/Padlock icon</span> next to the URL in the address bar.</span>
-                        </li>
-                        <li className="flex gap-3">
-                          <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-600 text-[10px] flex items-center justify-center font-bold">2</span>
-                          <span>Switch <span className="text-green-500 font-bold">Camera</span> and <span className="text-green-500 font-bold">Microphone</span> to "Allow".</span>
-                        </li>
-                        <li className="flex gap-3">
-                          <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-600 text-[10px] flex items-center justify-center font-bold">3</span>
-                          <span>Click <span className="text-blue-400 font-bold underline">Try Again Here</span> or refresh the page.</span>
-                        </li>
-                      </ol>
-                    </div>
-                    {isIframe && (
-                      <div className="bg-blue-600/10 p-4 rounded-xl border border-blue-500/20 text-xs text-left">
-                        <p className="text-blue-400 font-bold mb-1 italic">Pro Tip:</p>
-                        Some browsers block this *only* in this preview frame. Try the <span className="text-white font-bold">Open in New Tab</span> button below.
+              
+              {(() => {
+                const errorCode = getActiveErrorCode();
+                const rawMsg = getRawErrorMessage();
+                const isIframe = window.self !== window.top;
+                
+                if (errorCode === 'PERMISSION_DENIED' || (isIframe && errorCode === 'GENERIC')) {
+                  return (
+                    <>
+                      <h3 className="text-2xl font-bold mb-4">Hardware Blocked</h3>
+                      <div className="text-neutral-400 mb-8 text-sm leading-relaxed">
+                        <div className="flex flex-col items-center justify-center p-6 bg-red-500/10 rounded-2xl border border-red-500/20 mb-4">
+                           <Shield size={48} className="text-red-500 mb-3" />
+                           <p className="font-bold text-red-500">{isIframe ? "Iframe Restrict" : "Access Denied"}</p>
+                           <p className="text-[10px] opacity-70 mt-1">{rawMsg}</p>
+                        </div>
+                        <div className="bg-white/5 p-5 rounded-2xl border border-white/10 text-left">
+                          <p className="text-xs uppercase tracking-widest font-bold text-amber-500 mb-3">How to fix:</p>
+                          <ol className="space-y-4 text-sm">
+                            <li className="flex gap-3">
+                              <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-600 text-[10px] flex items-center justify-center font-bold">1</span>
+                              <span>Click <b>Open in New Tab</b> below for full compatibility.</span>
+                            </li>
+                            <li className="flex gap-3">
+                              <span className="flex-shrink-0 w-6 h-6 rounded-full bg-neutral-700 text-[10px] flex items-center justify-center font-bold">2</span>
+                              <span>Check your address bar for a <b>camera/lock icon</b> and select "Allow".</span>
+                            </li>
+                          </ol>
+                        </div>
                       </div>
-                    )}
-                  </div>
-                ) : cameraError?.startsWith('RAW_ERROR|') ? (
-                  <div className="space-y-4">
-                    <div className="flex flex-col items-center justify-center p-6 bg-red-500/10 rounded-2xl border border-red-500/20">
-                       <AlertTriangle size={48} className="text-red-500 mb-3" />
-                       <p className="font-bold text-red-500">System Error Detected</p>
-                       <p className="text-xs text-neutral-400 mt-1 font-mono break-all">{cameraError.split('|')[1]}</p>
-                    </div>
-                    
-                    <div className="bg-white/5 p-4 rounded-xl border border-white/10 text-left text-xs text-neutral-400">
-                      <p className="font-bold text-neutral-300 mb-2">Likely Causes:</p>
-                      <ul className="list-disc list-inside space-y-1">
-                        <li>Camera is being used by another application (Zoom, Teams, etc.)</li>
-                        <li>Hardware failure or disconnected cable</li>
-                        <li>Browser security prevents access in this context</li>
-                      </ul>
-                    </div>
+                    </>
+                  );
+                }
 
-                    <button 
-                      onClick={() => {
-                        const errorMsg = cameraError.split('|')[1];
-                        navigator.clipboard.writeText(errorMsg).then(() => {
-                           // Could add a toast here
-                        });
-                      }}
-                      className="text-[10px] text-blue-400 hover:underline uppercase tracking-widest font-bold"
-                    >
-                      Copy error for support
-                    </button>
-                  </div>
-                ) : (
-                  <p>{cameraError === 'HARDWARE_NOT_FOUND' ? "No webcam found. Please connect a webcam and click 'Try Again'." : "An unexpected error occurred while accessing the camera."}</p>
-                )}
-              </div>
+                if (errorCode === 'IN_USE') {
+                  return (
+                    <>
+                      <h3 className="text-2xl font-bold mb-4">Camera Busy</h3>
+                      <p className="text-neutral-400 mb-8 text-sm">Another app (Zoom, Teams, etc.) is likely using your camera. Close other apps and try again.</p>
+                    </>
+                  );
+                }
+                
+                return (
+                  <>
+                    <h3 className="text-2xl font-bold mb-4">Connection Failed</h3>
+                    <p className="text-neutral-400 mb-8 text-sm">
+                      {errorCode === 'HARDWARE_NOT_FOUND' ? "No camera detected. Please plug in a webcam." : "Device system error: " + rawMsg}
+                    </p>
+                  </>
+                );
+              })()}
               
               <div className="flex flex-col gap-3">
                 <button 
                   onClick={startCamera}
                   className="px-8 py-4 bg-blue-600 text-white rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-xl shadow-blue-600/20 flex items-center justify-center gap-3 active:scale-95"
                 >
-                  <Video size={20} />
+                  <RefreshCw size={20} />
                   Try Again Here
                 </button>
                 <button 
@@ -766,117 +775,134 @@ export const InterviewRoom: React.FC<InterviewRoomProps> = ({ sessionId, onClose
       </AnimatePresence>
       
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col items-center justify-center p-4 md:p-8 relative bg-black">
+      <div className="flex-1 flex flex-col items-center justify-center p-4 md:p-8 lg:p-12 relative bg-black overflow-hidden">
         <div 
-          onClick={async () => {
-            const v = videoRef.current;
-            if (v) {
-              try {
-                // If it's paused or not active, try to play
-                await v.play();
-                console.log("Manual play success via container click");
-                if (v.videoWidth > 0) setStreamActive(true);
-              } catch (e) {
-                console.warn("Manual play failed:", e);
-                // Last ditch: re-assign srcObject
-                if (stream) {
-                  v.srcObject = stream;
-                  v.play().catch(() => {});
-                }
-              }
-            }
-          }}
-          className="relative w-full max-w-7xl aspect-video bg-black rounded-[3rem] overflow-hidden border-8 border-neutral-900 shadow-2xl group cursor-pointer shadow-[0_0_100px_rgba(0,0,0,0.5)]"
+          className={`relative w-full max-w-6xl aspect-video bg-black rounded-[2.5rem] overflow-hidden border-[6px] md:border-8 border-neutral-900 shadow-2xl transition-all duration-500 ${interviewerJoined ? 'grid grid-cols-1 md:grid-cols-2 gap-2 p-2' : 'flex'}`}
         >
-          {/* Scanning Line Effect */}
-          <motion.div 
-            animate={{ top: ["0%", "100%", "0%"] }}
-            transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
-            className="absolute left-0 right-0 h-px bg-blue-500/30 shadow-[0_0_15px_rgba(59,130,246,0.5)] z-20 pointer-events-none"
-          />
+          {/* Candidate Feed Container */}
+          <div className="relative w-full h-full bg-neutral-900 overflow-hidden rounded-2xl md:rounded-[1.5rem] group shadow-inner">
+            {/* Scanning Line Effect */}
+            <motion.div 
+              animate={{ top: ["0%", "100%", "0%"] }}
+              transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
+              className="absolute left-0 right-0 h-px bg-blue-500/30 shadow-[0_0_15px_rgba(59,130,246,0.5)] z-20 pointer-events-none"
+            />
 
-          {/* Decorative Corner Markers */}
-          <div className="absolute inset-8 z-30 pointer-events-none">
-             <div className="absolute top-0 left-0 w-8 h-8 border-t-2 border-l-2 border-white/20 rounded-tl-2xl" />
-             <div className="absolute top-0 right-0 w-8 h-8 border-t-2 border-r-2 border-white/20 rounded-tr-2xl" />
-             <div className="absolute bottom-0 left-0 w-8 h-8 border-b-2 border-l-2 border-white/20 rounded-bl-2xl" />
-             <div className="absolute bottom-0 right-0 w-8 h-8 border-b-2 border-r-2 border-white/20 rounded-br-2xl" />
-             
-             {/* Pulsing Status Dot */}
-             <div className="absolute top-4 right-4 flex items-center gap-2 px-3 py-1.5 glass rounded-full">
-                <motion.div 
-                  animate={{ opacity: [1, 0.4, 1] }}
-                  transition={{ duration: 2, repeat: Infinity }}
-                  className={`w-2 h-2 rounded-full ${isProctorLoading ? 'bg-amber-500' : 'bg-green-500'}`}
-                />
-                <span className="text-[10px] uppercase font-bold tracking-widest text-neutral-900">
-                  {isProctorLoading ? 'AI Initializing' : 'AI Protection Live'}
-                </span>
-             </div>
+            {/* Decorative Corner Markers */}
+            <div className="absolute inset-4 z-30 pointer-events-none">
+                {/* Pulsing Status Dot */}
+                <div className="absolute top-0 left-0 flex items-center gap-2 px-3 py-1.5 glass rounded-full">
+                  <motion.div 
+                    animate={{ opacity: [1, 0.4, 1] }}
+                    transition={{ duration: 2, repeat: Infinity }}
+                    className={`w-2 h-2 rounded-full ${isProctorLoading ? 'bg-amber-500' : 'bg-green-500'}`}
+                  />
+                  <span className="text-[10px] uppercase font-bold tracking-widest text-neutral-900">
+                    {isProctorLoading ? 'AI Initializing' : 'AI Protection Live'}
+                  </span>
+                </div>
+            </div>
+
+            <video
+              key={videoKey}
+              ref={videoRef}
+              autoPlay
+              muted
+              playsInline
+              className="w-full h-full object-cover scale-x-[-1]"
+            />
+
+            {isCameraOff && (
+              <div 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleCamera();
+                }}
+                className="absolute inset-0 bg-neutral-900/95 backdrop-blur-sm flex flex-col items-center justify-center text-white z-10 cursor-pointer"
+              >
+                <div className="w-16 h-16 bg-red-500/10 text-red-500 rounded-full flex items-center justify-center mb-4">
+                  <VideoOff size={32} />
+                </div>
+                <p className="font-bold text-lg">Camera Off</p>
+              </div>
+            )}
+
+            <div className="absolute bottom-4 left-4 flex items-center gap-2 bg-black/40 px-3 py-1 rounded-full backdrop-blur-md">
+               <div className="w-1.5 h-1.5 bg-blue-500 rounded-full" />
+               <span className="text-[10px] text-white font-bold uppercase tracking-widest">You (Candidate)</span>
+            </div>
           </div>
 
-          <video
-            key={videoKey}
-            ref={videoRef}
-            autoPlay
-            muted
-            playsInline
-            onPlaying={() => setStreamActive(true)}
-            onLoadedData={() => setStreamActive(true)}
-            onLoadedMetadata={(e) => {
-              const video = e.currentTarget;
-              video.muted = true;
-              video.play().catch(err => {
-                console.warn("Autoplay blocked:", err);
-              });
-            }}
-            className="w-full h-full object-cover bg-black scale-x-[-1]"
-          />
-
-          {isCameraOff && (
-            <div 
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleCamera();
-              }}
-              className="absolute inset-0 bg-neutral-900/95 backdrop-blur-sm flex flex-col items-center justify-center text-white z-10 cursor-pointer group/pause"
-            >
-              <div className="w-24 h-24 bg-red-500/10 text-red-500 rounded-full flex items-center justify-center mb-6 group-hover/pause:scale-110 group-hover/pause:bg-red-500/20 transition-all duration-300">
-                <VideoOff size={48} />
-              </div>
-              <p className="font-bold text-2xl">Camera Paused</p>
-            </div>
-          )}
-
-
-          
-          {/* Interviewer Video placeholder */}
+          {/* Interviewer Feed Container (Grid Part) */}
           <AnimatePresence>
-            {interviewerJoined && (
+            {interviewerJoined ? (
               <motion.div 
-                initial={{ opacity: 0, scale: 0.8, x: 20 }}
-                animate={{ opacity: 1, scale: 1, x: 0 }}
-                exit={{ opacity: 0, scale: 0.8, x: 20 }}
-                className="absolute top-6 right-6 w-48 aspect-video bg-neutral-800 rounded-2xl border-2 border-blue-500/50 overflow-hidden shadow-2xl z-20"
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="relative w-full h-full bg-neutral-800 overflow-hidden rounded-2xl md:rounded-[1.5rem] shadow-inner flex items-center justify-center border-2 border-blue-500/20"
               >
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-white/30 gap-2">
-                  <div className="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center animate-pulse">
-                    <Video size={16} className="text-blue-400" />
-                  </div>
-                  <span className="text-[8px] font-bold uppercase tracking-widest">Live Video Active</span>
+                <div className="absolute inset-0 bg-black">
+                   {(() => {
+                     const isOffline = interviewerLastContact && (Date.now() - interviewerLastContact > 30000);
+                     
+                     if (isOffline) {
+                       return (
+                         <div className="absolute inset-0 flex flex-col items-center justify-center text-red-500/50 gap-2 bg-neutral-900 px-4 text-center">
+                            <Activity size={32} className="animate-pulse" />
+                            <span className="text-[10px] font-bold uppercase tracking-widest">Interviewer Connection Lost</span>
+                            <p className="text-[8px] text-neutral-500 max-w-[120px]">Wait for the recruiter to reconnect...</p>
+                         </div>
+                       );
+                     }
+
+                     if (interviewerScreenshot) {
+                       return (
+                         <img 
+                           src={interviewerScreenshot} 
+                           alt="Interviewer" 
+                           className="w-full h-full object-cover scale-x-[-1]"
+                           referrerPolicy="no-referrer"
+                         />
+                       );
+                     }
+
+                     return (
+                       <div className="absolute inset-0 flex flex-col items-center justify-center text-white/30 gap-3 bg-gradient-to-br from-neutral-800 to-black p-4 text-center">
+                          <div className="w-12 h-12 rounded-2xl bg-blue-500/20 flex items-center justify-center animate-pulse">
+                            <Video size={24} className="text-blue-400" />
+                          </div>
+                          <div className="flex flex-col items-center">
+                            <span className="text-xs font-bold uppercase tracking-widest text-blue-400">Recruiter Connected</span>
+                            <span className="text-[10px] font-medium text-white/40 mt-1">Establishing mutually secure feed...</span>
+                          </div>
+                       </div>
+                     );
+                   })()}
                 </div>
-                <div className="absolute bottom-2 left-2 flex items-center gap-1.5 bg-black/40 px-2 py-0.5 rounded-lg backdrop-blur-sm shadow-lg">
-                  <div className="w-1 h-1 bg-green-500 rounded-full animate-pulse" />
-                  <span className="text-[8px] font-bold text-white uppercase tracking-wider">{interviewerName} (Admin)</span>
+                
+                <div className="absolute top-4 right-4 flex items-center gap-2 bg-red-600/80 px-2 py-0.5 rounded text-[8px] text-white font-bold uppercase tracking-widest">
+                  <div className="w-1 h-1 bg-white rounded-full animate-pulse" />
+                  Live
+                </div>
+
+                <div className="absolute bottom-4 left-4 bg-black/40 px-3 py-1 rounded-full backdrop-blur-md flex items-center gap-2">
+                   <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
+                   <span className="text-[10px] text-white font-bold uppercase tracking-widest">{interviewerName} (Admin)</span>
                 </div>
               </motion.div>
+            ) : (
+              /* Floating Inset when Not in Meeting View (Optional - can be used for extra detail) */
+              null
             )}
           </AnimatePresence>
-          
-          <div className="absolute bottom-6 left-6 right-6 flex items-center justify-between">
-            <div className="bg-black/40 backdrop-blur-md border border-white/10 px-4 py-2 rounded-2xl flex flex-col">
-              <span className="text-[10px] text-white/60 uppercase font-bold tracking-widest">Candidate</span>
-              <span className="text-sm font-medium text-white">{profile?.displayName || user?.displayName || user?.email || 'Guest'}</span>
+        </div>
+
+        {/* Global Controls */}
+        <div className="absolute bottom-8 left-6 right-6 flex items-center justify-between z-30">
+            <div className="bg-black/60 backdrop-blur-md border border-white/10 px-4 py-2 rounded-2xl flex flex-col">
+              <span className="text-[10px] text-white/50 uppercase font-bold tracking-widest leading-none mb-1">Candidate</span>
+              <span className="text-sm font-medium text-white leading-none">{profile?.displayName || user?.displayName || user?.email || 'Guest'}</span>
             </div>
 
             {isMicMuted && (
@@ -920,7 +946,6 @@ export const InterviewRoom: React.FC<InterviewRoomProps> = ({ sessionId, onClose
                 <Power size={18} />
                 End Session
               </button>
-            </div>
           </div>
         </div>
       </div>
