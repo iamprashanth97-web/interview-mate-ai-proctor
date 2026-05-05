@@ -91,7 +91,11 @@ service cloud.firestore {
           (existing().candidateId == 'demo-invited' && incoming().candidateId == request.auth.uid) ||
           (existing().candidateId == request.auth.uid && existing().status != 'COMPLETED' &&
           isValidSession(incoming()) && (
-            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'cheatingScore', 'endTime', 'isFlagged', 'startTime', 'lastScreenshot', 'candidateId', 'candidateName', 'lastContact'])
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'cheatingScore', 'endTime', 'isFlagged', 'startTime', 
+              'lastScreenshot', 'candidateId', 'candidateName', 'lastContact',
+              'interviewerJoined', 'interviewerName', 'interviewerScreenshot', 'interviewerLastContact'
+            ])
           ))
         )
       );

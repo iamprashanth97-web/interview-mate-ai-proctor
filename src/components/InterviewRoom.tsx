@@ -366,8 +366,9 @@ export const InterviewRoom: React.FC<InterviewRoomProps> = ({ sessionId, onClose
         const ctx = canvas.getContext('2d');
         if (ctx) {
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          const base64 = canvas.toDataURL('image/jpeg', 0.4); // Lower quality for speed
+          const base64 = canvas.toDataURL('image/jpeg', 0.5); // Better quality
           try {
+            console.log("Candidate sending snapshot...");
             await updateDoc(doc(db, 'sessions', sessionId), {
               lastScreenshot: base64,
               lastContact: Date.now()
@@ -378,7 +379,7 @@ export const InterviewRoom: React.FC<InterviewRoomProps> = ({ sessionId, onClose
         }
         isSnapshotting = false;
       }
-    }, 4000); // 4 seconds
+    }, 2000); // Increased frequency to 2 seconds for smoother experience
 
     // Listen for alerts (optional, but good for sync)
     const q = query(collection(db, 'sessions', sessionId, 'alerts'), where('candidateId', '==', user?.uid));
@@ -842,49 +843,45 @@ export const InterviewRoom: React.FC<InterviewRoomProps> = ({ sessionId, onClose
                 exit={{ opacity: 0, scale: 0.95 }}
                 className="relative w-full h-full bg-neutral-800 overflow-hidden rounded-2xl md:rounded-[1.5rem] shadow-inner flex items-center justify-center border-2 border-blue-500/20"
               >
-                <div className="absolute inset-0 bg-black">
-                   {(() => {
-                     const isOffline = interviewerLastContact && (Date.now() - interviewerLastContact > 30000);
-                     
-                     if (isOffline) {
-                       return (
-                         <div className="absolute inset-0 flex flex-col items-center justify-center text-red-500/50 gap-2 bg-neutral-900 px-4 text-center">
-                            <Activity size={32} className="animate-pulse" />
-                            <span className="text-[10px] font-bold uppercase tracking-widest">Interviewer Connection Lost</span>
-                            <p className="text-[8px] text-neutral-500 max-w-[120px]">Wait for the recruiter to reconnect...</p>
-                         </div>
-                       );
-                     }
-
-                     if (interviewerScreenshot) {
-                       return (
-                         <img 
-                           src={interviewerScreenshot} 
-                           alt="Interviewer" 
-                           className="w-full h-full object-cover scale-x-[-1]"
-                           referrerPolicy="no-referrer"
-                         />
-                       );
-                     }
-
-                     return (
-                       <div className="absolute inset-0 flex flex-col items-center justify-center text-white/30 gap-3 bg-gradient-to-br from-neutral-800 to-black p-4 text-center">
-                          <div className="w-12 h-12 rounded-2xl bg-blue-500/20 flex items-center justify-center animate-pulse">
-                            <Video size={24} className="text-blue-400" />
+                    {(() => {
+                      const isOffline = interviewerLastContact && (Date.now() - (interviewerLastContact as number) > 30000);
+                      
+                      return (
+                        <>
+                          <div className="absolute inset-0 bg-black">
+                            {isOffline ? (
+                              <div className="absolute inset-0 flex flex-col items-center justify-center text-red-500/50 gap-2 bg-neutral-900 px-4 text-center">
+                                 <Activity size={32} className="animate-pulse" />
+                                 <span className="text-[10px] font-bold uppercase tracking-widest">Interviewer Connection Lost</span>
+                                 <p className="text-[8px] text-neutral-500 max-w-[120px]">Wait for the recruiter to reconnect...</p>
+                              </div>
+                            ) : interviewerScreenshot ? (
+                              <img 
+                                src={interviewerScreenshot} 
+                                alt="Interviewer" 
+                                className="w-full h-full object-cover scale-x-[-1]"
+                                referrerPolicy="no-referrer"
+                              />
+                            ) : (
+                              <div className="absolute inset-0 flex flex-col items-center justify-center text-white/30 gap-3 bg-gradient-to-br from-neutral-800 to-black p-4 text-center">
+                                 <div className="w-12 h-12 rounded-2xl bg-blue-500/20 flex items-center justify-center animate-pulse">
+                                   <Video size={24} className="text-blue-400" />
+                                 </div>
+                                 <div className="flex flex-col items-center">
+                                   <span className="text-xs font-bold uppercase tracking-widest text-blue-400">Recruiter Connected</span>
+                                   <span className="text-[10px] font-medium text-white/40 mt-1">Establishing mutually secure feed...</span>
+                                 </div>
+                              </div>
+                            )}
                           </div>
-                          <div className="flex flex-col items-center">
-                            <span className="text-xs font-bold uppercase tracking-widest text-blue-400">Recruiter Connected</span>
-                            <span className="text-[10px] font-medium text-white/40 mt-1">Establishing mutually secure feed...</span>
+                          
+                          <div className="absolute top-4 right-4 flex items-center gap-2 bg-red-600/80 px-3 py-1 rounded text-[8px] text-white font-bold uppercase tracking-widest backdrop-blur-sm border border-white/10 overflow-hidden">
+                            <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${isOffline ? 'bg-neutral-400 font-bold' : 'bg-white'}`} />
+                            {isOffline ? 'Recruiter Offline' : 'Recruiter Live'}
                           </div>
-                       </div>
-                     );
-                   })()}
-                </div>
-                
-                <div className="absolute top-4 right-4 flex items-center gap-2 bg-red-600/80 px-2 py-0.5 rounded text-[8px] text-white font-bold uppercase tracking-widest">
-                  <div className="w-1 h-1 bg-white rounded-full animate-pulse" />
-                  Live
-                </div>
+                        </>
+                      );
+                    })()}
 
                 <div className="absolute bottom-4 left-4 bg-black/40 px-3 py-1 rounded-full backdrop-blur-md flex items-center gap-2">
                    <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />

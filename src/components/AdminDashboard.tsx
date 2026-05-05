@@ -30,19 +30,17 @@ interface AdminVideoProps {
   stream: MediaStream;
 }
 
-const AdminVideo: React.FC<AdminVideoProps> = ({ stream }) => {
-  const videoRef = React.useRef<HTMLVideoElement>(null);
-
+const AdminVideo = React.forwardRef<HTMLVideoElement, AdminVideoProps>(({ stream }, ref) => {
   useEffect(() => {
-    if (videoRef.current && stream) {
-      videoRef.current.srcObject = stream;
+    if (ref && 'current' in ref && ref.current && stream) {
+      ref.current.srcObject = stream;
     }
-  }, [stream]);
+  }, [stream, ref]);
 
   return (
     <div className="w-full h-full bg-black">
       <video 
-        ref={videoRef}
+        ref={ref}
         autoPlay
         muted
         playsInline
@@ -50,7 +48,8 @@ const AdminVideo: React.FC<AdminVideoProps> = ({ stream }) => {
       />
     </div>
   );
-};
+});
+AdminVideo.displayName = 'AdminVideo';
 
 export const AdminDashboard: React.FC = () => {
   const { profile } = useAuth();
@@ -71,6 +70,7 @@ export const AdminDashboard: React.FC = () => {
   const [isConnecting, setIsConnecting] = useState(false);
   const [adminStream, setAdminStream] = useState<MediaStream | null>(null);
   const adminVideoRefForSnap = React.useRef<HTMLVideoElement>(null);
+  const activeVideoRef = React.useRef<HTMLVideoElement>(null);
 
   const handleJoinInterview = async (sessionToJoin?: InterviewSession) => {
     const session = sessionToJoin || selectedSession;
@@ -143,34 +143,32 @@ export const AdminDashboard: React.FC = () => {
   // Add snapshot logic for admin's camera
   useEffect(() => {
     let snapshotInterval: any;
-    const video = adminVideoRefForSnap.current;
     
-    if (isJoining && adminStream && selectedSessionId && video) {
-      if (video.srcObject !== adminStream) {
-        video.srcObject = adminStream;
-      }
-      
+    if (isJoining && adminStream && selectedSessionId) {
       snapshotInterval = setInterval(async () => {
-        if (video.readyState >= 2) {
+        // Use activeVideoRef if available (from the live view), fallback to adminVideoRefForSnap (from the dashboard preview)
+        const video = activeVideoRef.current || adminVideoRefForSnap.current;
+        
+        if (video && video.readyState >= 2) {
           const canvas = document.createElement('canvas');
-          canvas.width = 300; // Smaller for speed
-          canvas.height = 225;
+          canvas.width = 400; // Better resolution
+          canvas.height = 300;
           const ctx = canvas.getContext('2d');
           if (ctx) {
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            const base64 = canvas.toDataURL('image/jpeg', 0.3); // Lower quality
+            const base64 = canvas.toDataURL('image/jpeg', 0.5); // Better quality
             try {
+              console.log("Admin sending snapshot from:", video === activeVideoRef.current ? "Active Room" : "Dashboard Preview");
               await updateDoc(doc(db, 'sessions', selectedSessionId), {
                 interviewerScreenshot: base64,
-                interviewerLastContact: Date.now(),
-                lastContact: Date.now()
+                interviewerLastContact: Date.now()
               });
             } catch (e) {
               console.warn("Interviewer snapshot failed:", e);
             }
           }
         }
-      }, 3000); // Admin snapshots every 3 seconds
+      }, 2000); // Admin snapshots every 2 seconds
     }
 
     return () => {
@@ -497,6 +495,21 @@ export const AdminDashboard: React.FC = () => {
                           </div>
                         </div>
 
+                        {/* Local Admin Preview - Kept visible to ensure browser doesn't throttle the snapshots */}
+                        <div className="relative aspect-video bg-neutral-100 rounded-2xl border-2 border-dashed border-neutral-200 overflow-hidden flex items-center justify-center">
+                           {adminStream ? (
+                             <AdminVideo stream={adminStream} ref={adminVideoRefForSnap} />
+                           ) : (
+                             <div className="absolute inset-0 flex flex-col items-center justify-center text-neutral-400 gap-2 p-4 text-center">
+                               <VideoOff size={24} className="opacity-20" />
+                               <span className="text-[10px] font-bold uppercase tracking-widest opacity-40">Local Cam Ready</span>
+                             </div>
+                           )}
+                           <div className="absolute top-2 left-2 px-2 py-1 bg-black/40 backdrop-blur-md rounded-md">
+                              <span className="text-[8px] font-bold text-white uppercase tracking-widest">You (Admin)</span>
+                           </div>
+                        </div>
+
                         <div className="flex gap-2">
                           <button 
                             onClick={() => handleJoinInterview()}
@@ -561,11 +574,10 @@ export const AdminDashboard: React.FC = () => {
           alerts={sessionAlerts} 
           adminStream={adminStream}
           onLeave={handleLeaveInterview}
+          activeVideoRef={activeVideoRef}
         />
       )}
 
-      {/* Schedule Modal */}
-      <video ref={adminVideoRefForSnap} autoPlay muted playsInline className="fixed -left-[1000px] -top-[1000px] w-[320px] h-[240px] opacity-1" />
       <AnimatePresence>
         {showScheduleModal && (
           <motion.div 
@@ -681,9 +693,10 @@ interface LiveMeetingViewProps {
   alerts: AlertLog[];
   adminStream: MediaStream | null;
   onLeave: () => void;
+  activeVideoRef: React.RefObject<HTMLVideoElement | null>;
 }
 
-const LiveMeetingView: React.FC<LiveMeetingViewProps> = ({ session, alerts, adminStream, onLeave }) => {
+const LiveMeetingView: React.FC<LiveMeetingViewProps> = ({ session, alerts, adminStream, onLeave, activeVideoRef }) => {
   return (
     <motion.div 
       initial={{ opacity: 0, y: 20 }}
@@ -730,32 +743,34 @@ const LiveMeetingView: React.FC<LiveMeetingViewProps> = ({ session, alerts, admi
                 sess.lastContact && 
                 (Date.now() - sess.lastContact > 30000);
               
-              if (sess.lastScreenshot && !isDisconnected) {
-                return (
-                  <img 
-                    src={sess.lastScreenshot} 
-                    alt="Candidate" 
-                    className="w-full h-full object-cover"
-                    referrerPolicy="no-referrer"
-                  />
-                );
-              }
-              
               return (
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-white/40 gap-4 p-4 text-center bg-neutral-800">
-                  <Activity size={48} className="animate-pulse text-blue-500/30" />
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-widest text-white/60">{isDisconnected ? 'Candidate Link Lost' : 'Synchronizing Feed...'}</p>
-                    <p className="text-[10px] text-white/20 mt-1 max-w-[200px] mx-auto">AI is establishing a secure monitoring channel with the remote client.</p>
+                <>
+                  {sess.lastScreenshot && !isDisconnected ? (
+                    <img 
+                      src={sess.lastScreenshot} 
+                      alt="Candidate" 
+                      className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center text-white/40 gap-4 p-4 text-center bg-neutral-800">
+                      <Activity size={48} className="animate-pulse text-blue-500/30" />
+                      <div>
+                        <p className="text-xs font-bold uppercase tracking-widest text-white/60">{isDisconnected ? 'Candidate Link Lost' : 'Synchronizing Feed...'}</p>
+                        <p className="text-[10px] text-white/20 mt-1 max-w-[200px] mx-auto">AI is establishing a secure monitoring channel with the remote client.</p>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="absolute top-4 left-4 flex items-center gap-2 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10">
+                    <div className={`w-2 h-2 rounded-full animate-pulse ${isDisconnected ? 'bg-neutral-500' : 'bg-red-500'}`} />
+                    <span className="text-[10px] font-bold text-white uppercase tracking-widest leading-none">
+                      Candidate (Remote) {isDisconnected ? '[STALE]' : '[LIVE]'}
+                    </span>
                   </div>
-                </div>
+                </>
               );
             })()}
-
-            <div className="absolute top-4 left-4 flex items-center gap-2 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10">
-              <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
-              <span className="text-[10px] font-bold text-white uppercase tracking-widest leading-none">Candidate (Remote)</span>
-            </div>
             
             <div className="absolute bottom-6 left-6 bg-black/40 px-4 py-2 rounded-2xl backdrop-blur-md flex flex-col">
               <span className="text-[10px] text-white/50 font-bold uppercase tracking-widest leading-none mb-1">Speaker</span>
@@ -766,7 +781,7 @@ const LiveMeetingView: React.FC<LiveMeetingViewProps> = ({ session, alerts, admi
           {/* Admin/Recruiter Feed */}
           <div className="relative flex-1 bg-neutral-900 overflow-hidden rounded-2xl md:rounded-[1.8rem] border-2 border-blue-500/20 group">
             {adminStream ? (
-              <AdminVideo stream={adminStream} />
+              <AdminVideo stream={adminStream} ref={activeVideoRef} />
             ) : (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-white/40 gap-4 p-4 text-center bg-neutral-800">
                 <VideoOff size={48} className="text-white/10" />
